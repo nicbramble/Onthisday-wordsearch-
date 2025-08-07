@@ -142,8 +142,50 @@ function Grid({
   foundCoords: Set<string>,
   dragPath: [number,number][]
 }) {
+  // Helper to get cell position from touch
+  const getCellFromTouch = (touch: Touch) => {
+    for (let r = 0; r < cellRefs.current.length; r++) {
+      for (let c = 0; c < (cellRefs.current[r] || []).length; c++) {
+        const el = cellRefs.current[r][c];
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        if (
+          touch.clientX >= rect.left &&
+          touch.clientX <= rect.right &&
+          touch.clientY >= rect.top &&
+          touch.clientY <= rect.bottom
+        ) {
+          return [r, c] as [number, number];
+        }
+      }
+    }
+    return null;
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    const cell = getCellFromTouch(touch);
+    if (cell) onDown(cell[0], cell[1]);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    const cell = getCellFromTouch(touch);
+    if (cell) onEnter(cell[0], cell[1]);
+  };
+
+  const handleTouchEnd = () => {
+    onUp();
+  };
+
   return (
-    <div onMouseLeave={onUp} style={{display:'inline-block', userSelect:'none', border:'1px solid #e5e7eb'}}>
+    <div
+      onMouseLeave={onUp}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{display:'inline-block', userSelect:'none', border:'1px solid #e5e7eb'}}
+    >
       {grid.map((row,r)=>(
         <div key={r} style={{display:'flex'}}>
           {row.map((ch,c)=>{

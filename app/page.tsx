@@ -22,7 +22,7 @@ export default function Home() {
   const [found, setFound] = useState<Set<string>>(new Set());
   const [blurbs, setBlurbs] = useState<{word:string; year?:number; text:string}[]>([]);
 
-  const [streak, setStreak] = useState<number>(()=> Number(localStorage.getItem('streak')||0));
+  const [streak, setStreak] = useState<number>(0);;
   const lastSolvedKey = 'lastSolvedDate';
 
   useEffect(()=> {
@@ -34,6 +34,12 @@ export default function Home() {
       setPuzzle(makePuzzle(words, dateKey, 12));
     })();
   }, [mm, dd, dateKey]);
+
+useEffect(() => {
+  // Safe on client only
+  const stored = typeof window !== 'undefined' ? localStorage.getItem('streak') : null;
+  if (stored) setStreak(Number(stored));
+}, []);
 
   const [dragPath, setDragPath] = useState<[number,number][]>([]);
   const cellRefs = useRef<HTMLDivElement[][]>([]);

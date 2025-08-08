@@ -4,15 +4,15 @@ import { useEffect, useRef, useState } from 'react';
 type PlacedWord = { word: string; coords: [number, number][] };
 type DailyRes = { dateKey: string; grid: string[][]; placed: PlacedWord[]; words: string[] };
 
-function cellKey(r: number, c: number) {
-  return `${r},${c}`;
-}
+function cellKey(r: number, c: number) { return `${r},${c}`; }
 
 export default function Home() {
   const [data, setData] = useState<DailyRes | null>(null);
   const [foundWords, setFoundWords] = useState<Set<string>>(new Set());
   const [foundCoords, setFoundCoords] = useState<Set<string>>(new Set());
   const [dragPath, setDragPath] = useState<[number, number][]>([]);
+  const [selectedWord, setSelectedWord] = useState<string | null>(null);
+  const [manualMode, setManualMode] = useState<boolean>(false); // allow tap-to-check for testing
   const cellRefs = useRef<HTMLDivElement[][]>([]);
 
   useEffect(() => {
@@ -23,31 +23,25 @@ export default function Home() {
     })();
   }, []);
 
-  function startAt(r: number, c: number) {
-    setDragPath([[r, c]]);
-  }
+  function startAt(r: number, c: number) { setDragPath([[r, c]]); }
   function extendTo(r: number, c: number) {
     if (!dragPath.length) return;
     const [lr, lc] = dragPath[dragPath.length - 1];
     if (lr === r && lc === c) return;
-    setDragPath((p) => [...p, [r, c]]);
+    setDragPath(p => [...p, [r, c]]);
   }
   function finishPath() {
-    if (!data || dragPath.length < 2) {
-      setDragPath([]);
-      return;
-    }
+    if (!data || dragPath.length < 2) { setDragPath([]); return; }
     const pathStr = dragPath.map(([r, c]) => cellKey(r, c)).join('|');
 
-    const hit = data.placed.find((p) => {
+    const hit = data.placed.find(p => {
       const fwd = p.coords.map(([r, c]) => cellKey(r, c)).join('|');
       const rev = [...p.coords].reverse().map(([r, c]) => cellKey(r, c)).join('|');
       return fwd === pathStr || rev === pathStr;
     });
 
     if (hit && !foundWords.has(hit.word)) {
-      const nextWords = new Set(foundWords);
-      nextWords.add(hit.word);
+      const nextWords = new Set(foundWords); nextWords.add(hit.word);
       setFoundWords(nextWords);
 
       const nextCoords = new Set(foundCoords);
@@ -58,31 +52,32 @@ export default function Home() {
     setDragPath([]);
   }
 
-  if (!data) return <div style={{ padding: 20 }}>Loading…</div>;
+  function toggleManualCheck(word: string) {
+    // Manual check for testing if a user taps the word in the list
+    const next = new Set(foundWords);
+    if (next.has(word)) next.delete(word); else next.add(word);
+    setFoundWords(next);
 
-  const allFound = data.words.every((w) => foundWords.has(w));
+    // If we check manually, also highlight its coords (if placed)
+    const placed = data?.placed.find(p => p.word === word);
+    if (placed) {
+      const nc = new Set(foundCoords);
+      placed.coords.forEach(([r, c]) => nc.add(cellKey(r, c)));
+      setFoundCoords(nc);
+    }
+  }
+
+  if (!data) return <div style={{ padding: 20 }}>Loading…</div>;
+  const allFound = data.words.every(w => foundWords.has(w));
 
   return (
     <main style={{ maxWidth: 1000, margin: '24px auto', padding: '0 16px' }}>
-      <header
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'baseline',
-          marginBottom: 16,
-        }}
-      >
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
         <h1 style={{ margin: 0, fontSize: 22 }}>Daily Word Search</h1>
-        <div style={{ fontSize: 14, opacity: 0.7 }}>{data.dateKey}</div>
+        <div style={{ fontSize: 14, opacity: .75 }}>{data.dateKey}</div>
       </header>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 280px',
-          gap: 24,
-        }}
-      >
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 24 }}>
         {/* Grid */}
         <div>
           <Grid
@@ -93,72 +88,62 @@ export default function Home() {
             onExtend={extendTo}
             onFinish={finishPath}
             cellRefs={cellRefs}
+            selectedWordCoords={selectedWord ? (data.placed.find(p => p.word === selectedWord)?.coords ?? []) : []}
           />
         </div>
 
-        {/* Word list / bank */}
+        {/* Right panel */}
         <aside>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: 16 }}>Word Bank</h3>
-            <span style={{ fontSize: 12, opacity: 0.6 }}>
-              {Array.from(foundWords).length}/{data.words.length}
-            </span>
+            <label style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="checkbox" checked={manualMode} onChange={e => setManualMode(e.target.checked)} />
+              Manual check
+            </label>
+          </div>
+          <div style={{ fontSize: 12, opacity: .6, marginTop: 4 }}>
+            Found {Array.from(foundWords).length}/{data.words.length}
           </div>
 
-          <div
-            style={{
-              marginTop: 10,
-              border: '1px solid #e5e7eb',
-              borderRadius: 8,
-              padding: 10,
-              maxHeight: 420,
-              overflowY: 'auto',
-              background: '#fafafa',
-            }}
-          >
-            {data.words.map((w) => {
+          <div style={{ marginTop: 10, border: '1px solid #e5e7eb', borderRadius: 8, padding: 10, maxHeight: 460, overflowY: 'auto', background: '#fafafa' }}>
+            {data.words.map(w => {
               const solved = foundWords.has(w);
+              const isSelected = selectedWord === w;
               return (
-                <div
+                <button
                   key={w}
+                  onClick={() => { setSelectedWord(isSelected ? null : w); if (manualMode) toggleManualCheck(w); }}
                   style={{
-                    padding: '6px 8px',
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '8px 10px',
                     borderRadius: 6,
                     fontSize: 14,
-                    marginBottom: 6,
-                    background: solved ? '#ecfdf5' : '#fff',
+                    marginBottom: 8,
+                    background: solved ? '#ecfdf5' : isSelected ? '#eef2ff' : '#fff',
                     color: solved ? '#065f46' : '#111827',
                     textDecoration: solved ? 'line-through' : 'none',
-                    border: '1px solid #e5e7eb',
+                    border: `1px solid ${isSelected ? '#c7d2fe' : '#e5e7eb'}`,
+                    cursor: 'pointer'
                   }}
                 >
+                  <span style={{ marginRight: 8 }}>{solved ? '✅' : '⬜️'}</span>
                   {w}
-                </div>
+                </button>
               );
             })}
           </div>
 
           {allFound && (
-            <div
-              style={{
-                marginTop: 12,
-                padding: 10,
-                border: '1px solid #10b981',
-                color: '#065f46',
-                background: '#ecfdf5',
-                borderRadius: 8,
-                fontWeight: 600,
-                textAlign: 'center',
-              }}
-            >
+            <div style={{ marginTop: 12, padding: 10, border: '1px solid #10b981', color: '#065f46', background: '#ecfdf5', borderRadius: 8, fontWeight: 600, textAlign: 'center' }}>
               🎉 All words found!
             </div>
           )}
         </aside>
       </div>
 
-      <footer style={{ marginTop: 24, fontSize: 12, opacity: 0.6 }}>
-        Tip: tap the first letter and drag across the rest (or click & drag with a mouse).
+      <footer style={{ marginTop: 16, fontSize: 12, opacity: .65 }}>
+        Tip: tap the first letter and drag across the rest (or click & drag). Tap a word to highlight its path; enable “Manual check” for quick testing.
       </footer>
     </main>
   );
@@ -172,6 +157,7 @@ function Grid({
   onExtend,
   onFinish,
   cellRefs,
+  selectedWordCoords
 }: {
   grid: string[][];
   foundCoords: Set<string>;
@@ -180,9 +166,13 @@ function Grid({
   onExtend: (r: number, c: number) => void;
   onFinish: () => void;
   cellRefs: React.MutableRefObject<HTMLDivElement[][]>;
+  selectedWordCoords: [number, number][];
 }) {
   const size = grid[0]?.length ?? 12;
-  const cellPx = Math.max(28, Math.min(40, Math.floor(360 / size))); // auto-fit cell size
+  const cellPx = Math.max(28, Math.min(40, Math.floor(360 / size)));
+
+  // make a set for quick highlight of the selected word
+  const selectedSet = new Set(selectedWordCoords.map(([r, c]) => cellKey(r, c)));
 
   return (
     <div
@@ -198,12 +188,7 @@ function Grid({
         if (el?.dataset?.r && el?.dataset?.c) onExtend(parseInt(el.dataset.r), parseInt(el.dataset.c));
       }}
       onTouchEnd={onFinish}
-      style={{
-        display: 'inline-block',
-        userSelect: 'none',
-        border: '1px solid #e5e7eb',
-        touchAction: 'none',
-      }}
+      style={{ display: 'inline-block', userSelect: 'none', border: '1px solid #e5e7eb', touchAction: 'none' }}
     >
       {grid.map((row, r) => (
         <div key={r} style={{ display: 'flex' }}>
@@ -211,17 +196,18 @@ function Grid({
             const k = cellKey(r, c);
             const inDrag = dragPath.some(([rr, cc]) => rr === r && cc === c);
             const isFound = foundCoords.has(k);
+            const isSelected = selectedSet.has(k) && !isFound;
             return (
               <div
                 key={c}
                 data-r={r}
                 data-c={c}
-                ref={(el) => {
+                ref={el => {
                   if (!cellRefs.current[r]) cellRefs.current[r] = [];
                   cellRefs.current[r][c] = el!;
                 }}
                 onMouseDown={() => onStart(r, c)}
-                onMouseEnter={(e) => e.buttons === 1 && onExtend(r, c)} // mouse drag (left button)
+                onMouseEnter={(e) => e.buttons === 1 && onExtend(r, c)}
                 onMouseUp={onFinish}
                 style={{
                   width: cellPx,
@@ -233,7 +219,7 @@ function Grid({
                   fontSize: 14,
                   borderRight: '1px solid #e5e7eb',
                   borderBottom: '1px solid #e5e7eb',
-                  background: isFound ? '#dcfce7' : inDrag ? '#e0e7ff' : '#fff',
+                  background: isFound ? '#dcfce7' : inDrag ? '#e0e7ff' : isSelected ? '#fee2e2' : '#fff'
                 }}
               >
                 {ch}

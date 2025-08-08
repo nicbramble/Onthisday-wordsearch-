@@ -32,7 +32,16 @@ export default function Home() {
       const res = await fetch(`/api/onthisday/${mm}/${dd}`);
       const json = await res.json();
       setOtd(json);
-      const words = extractKeywords(json, 14);
+
+      // Extract words from API
+      let words = extractKeywords(json, 14);
+      console.log('Extracted words for today:', words);
+
+      // Fallback test words if API returns nothing
+      if (!words.length) {
+        words = ['TEST', 'WORD', 'SEARCH', 'PUZZLE', 'HISTORY', 'EVENT', 'TODAY', 'FUN'];
+      }
+
       const p = makePuzzle(words, dateKey, 12);
       setPuzzle(p);
     })();
@@ -146,11 +155,15 @@ export default function Home() {
                 background: '#fafafa'
               }}
             >
-              {puzzle.allWords.map((w) => (
-                <div key={w} style={{ padding: '4px 0', fontSize: 14 }}>
-                  {w}
-                </div>
-              ))}
+              {puzzle.allWords.length > 0 ? (
+                puzzle.allWords.map((w) => (
+                  <div key={w} style={{ padding: '4px 0', fontSize: 14 }}>
+                    {w}
+                  </div>
+                ))
+              ) : (
+                <div style={{ fontSize: 14, color: '#888' }}>No words found</div>
+              )}
             </div>
           </div>
         </div>

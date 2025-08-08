@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 type PlacedWord = { word: string; coords: [number, number][] };
 type Clue = {
@@ -23,9 +23,15 @@ function norm(s:string){ return (s||'').toUpperCase().replace(/[^A-Z]/g,''); }
 
 export default function Home() {
   const [data, setData] = useState<DailyRes | null>(null);
+
+  // game state
   const [foundCoords, setFoundCoords] = useState<Set<string>>(new Set());
   const [foundWords, setFoundWords] = useState<Set<string>>(new Set());
-  const [dragPath, setDragPath] = useState<[number, number][]>([]);
+
+  // tap-to-select path (current attempt)
+  const [path, setPath] = useState<[number, number][]>([]);
+
+  // guesses for riddles (type then find in grid)
   const [guesses, setGuesses] = useState<Record<number, string>>({});
 
   useEffect(() => {
@@ -36,41 +42,91 @@ export default function Home() {
     })();
   }, []);
 
-  // always have words
+  // words safety (in case API ever omits `words`)
   const words: string[] = Array.isArray(data?.words) && data!.words!.length
     ? data!.words!
     : Array.from(new Set((data?.placed ?? []).map(p => p.word)));
 
-  function handlePreviewPath(cells: [number, number][]) {
-    setDragPath(cells);
+  // ---- TAP-TO-SELECT LOGIC ----
+
+  // Is cell B exactly the next cell after A in direction [dr,dc]?
+  function isNext(a:[number,number], b:[number,number], dir:[number,number]) {
+    return b[0] === a[0] + dir[0] && b[1] === a[1] + dir[1];
   }
 
-  function handleFinishPath(cells: [number, number][]) {
-    setDragPath([]);
-    if (!data || cells.length < 2) return;
+  // Given first two cells, lock the direction (8-way unit step)
+  function directionOf(a:[number,number], b:[number,number]): [number,number] | null {
+    const dr = Math.sign(b[0] - a[0]);
+    const dc = Math.sign(b[1] - a[1]);
+    if (dr === 0 && dc === 0) return null;
+    return [dr as 0|-1|1, dc as 0|-1|1];
+  }
 
-    const pathStr = cells.map(([r, c]) => k(r, c)).join('|');
+  // When user taps a cell:
+  function onTapCell(r:number,c:number) {
+    const cell: [number,number] = [r,c];
+    if (path.length === 0) {
+      setPath([cell]);
+      return;
+    }
+    if (path.length === 1) {
+      // allow any second tap (even diagonal)
+      const next = [...path, cell];
+      setPath(next);
+      checkForWord(next);
+      return;
+    }
+
+    // we have >= 2 cells: enforce direction and adjacency
+    const dir = directionOf(path[0], path[1]);
+    if (!dir) {
+      // degenerate, reset start
+      setPath([cell]);
+      return;
+    }
+    const last = path[path.length - 1];
+    if (isNext(last, cell, dir)) {
+      const next = [...path, cell];
+      setPath(next);
+      checkForWord(next);
+    } else {
+      // not the next in line — start a fresh path from this tap
+      setPath([cell]);
+    }
+  }
+
+  function clearPath() {
+    setPath([]);
+  }
+
+  // Compare the current path against placed words (forward or reverse)
+  function checkForWord(cells:[number,number][]) {
+    if (!data || cells.length < 2) return;
+    const pathStr = cells.map(([r,c]) => k(r,c)).join('|');
     const hit = data.placed.find(p => {
-      const fwd = p.coords.map(([r,c])=>k(r,c)).join('|');
-      const rev = [...p.coords].reverse().map(([r,c])=>k(r,c)).join('|');
+      const fwd = p.coords.map(([r,c]) => k(r,c)).join('|');
+      const rev = [...p.coords].reverse().map(([r,c]) => k(r,c)).join('|');
       return fwd === pathStr || rev === pathStr;
     });
 
     if (hit && !foundWords.has(hit.word)) {
-      const nw = new Set(foundWords); nw.add(hit.word); setFoundWords(nw);
+      const nw = new Set(foundWords); nw.add(hit.word);
+      setFoundWords(nw);
       const nc = new Set(foundCoords);
-      hit.coords.forEach(([r,c]) => nc.add(k(r,c)));
+      hit.coords.forEach(([rr,cc]) => nc.add(k(rr,cc)));
       setFoundCoords(nc);
+      setPath([]); // reset after a successful find
     }
   }
 
+  // ---- RIDDLE GUESSING ----
   function submitGuess(n:number){
     if (!data?.clues) return;
     const clue = data.clues.find(c => c.number===n)!;
     const g = norm(guesses[n] || '');
     if (!g) return;
     if (g === clue.answerNormalized) {
-      alert('Correct! Now find it in the grid to mark complete.');
+      alert('Correct! Now tap the letters in order to mark it complete.');
     } else {
       alert('Not quite—try again.');
     }
@@ -78,6 +134,7 @@ export default function Home() {
 
   if (!data) return <div style={{ padding: 20 }}>Loading…</div>;
 
+  // Completion per clue: guessed right AND found in grid
   const solvedByClue = new Set<number>();
   (data.clues ?? []).forEach(c => {
     const guessed = norm(guesses[c.number]||'') === c.answerNormalized;
@@ -97,20 +154,33 @@ export default function Home() {
       </header>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 360px', gap: 24 }}>
+        {/* LEFT: Grid + controls */}
         <div>
-          <Grid
+          <TapGrid
             grid={data.grid}
+            path={path}
             foundCoords={foundCoords}
-            dragPath={dragPath}
-            onPreviewPath={handlePreviewPath}
-            onFinishPath={handleFinishPath}
+            onTapCell={onTapCell}
           />
+
+          <div style={{ marginTop: 10, display:'flex', gap:8 }}>
+            <button
+              onClick={clearPath}
+              style={{ padding:'8px 12px', border:'1px solid #e5e7eb', borderRadius:8, background:'#fff' }}
+            >
+              Clear
+            </button>
+            <div style={{ fontSize:12, opacity:.7, alignSelf:'center' }}>
+              Selection length: {path.length}
+            </div>
+          </div>
         </div>
 
+        {/* RIGHT: Clues / Riddles */}
         <aside>
           <h3 style={{ margin: 0, fontSize:16 }}>Clues</h3>
           <div style={{ fontSize:12, opacity:.65, marginBottom:8 }}>
-            Solve = type the correct answer <b>and</b> then find it in the grid.
+            Step 1: type the answer. Step 2: tap the letters in order on the grid.
           </div>
 
           <div style={{ display:'grid', gap:10 }}>
@@ -139,7 +209,7 @@ export default function Home() {
                     {complete
                       ? '✅ Solved!'
                       : guessed
-                        ? '✓ Correct — now find it in the grid'
+                        ? '✓ Correct — now tap the letters in the grid'
                         : 'Enter your answer and press Guess'}
                   </div>
                 </div>
@@ -158,135 +228,50 @@ export default function Home() {
   );
 }
 
-function Grid({
+/** Tappable grid (no drag) */
+function TapGrid({
   grid,
+  path,
   foundCoords,
-  dragPath,
-  onPreviewPath,
-  onFinishPath,
+  onTapCell,
 }: {
   grid: string[][];
+  path: [number, number][];
   foundCoords: Set<string>;
-  dragPath: [number, number][];
-  onPreviewPath: (cells: [number, number][]) => void;
-  onFinishPath: (cells: [number, number][]) => void;
+  onTapCell: (r:number,c:number)=>void;
 }) {
   const rows = grid.length;
   const cols = grid[0]?.length ?? 0;
-  const containerRef = useRef<HTMLDivElement>(null);
   const cellPx = Math.max(28, Math.min(40, Math.floor(360 / Math.max(cols, 12))));
-
-  const DIRS: [number, number][] = [
-    [-1, 0], [-1, 1], [0, 1], [1, 1],
-    [1, 0], [1, -1], [0, -1], [-1, -1],
-  ];
-
-  let anchor: [number, number] | null = null;
-  let preview: [number, number][] = [];
-
-  function pointToCell(clientX: number, clientY: number): [number, number] | null {
-    const el = containerRef.current;
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    const c = Math.floor(x / cellPx);
-    const r = Math.floor(y / cellPx);
-    if (r < 0 || r >= rows || c < 0 || c >= cols) return null;
-    return [r, c];
-  }
-
-  function snapDir(dr: number, dc: number): [number, number] {
-    const len = Math.hypot(dr, dc) || 1;
-    const ur = dr / len, uc = dc / len;
-    let best: [number, number] = [0, 1], bestDot = -2;
-    for (const [vr, vc] of DIRS) {
-      const dot = ur * vr + uc * vc;
-      if (dot > bestDot) { bestDot = dot; best = [vr, vc]; }
-    }
-    return best;
-  }
-
-  function buildLine(a: [number, number], b: [number, number]): [number, number][] {
-    const [r0, c0] = a;
-    const [r1, c1] = b;
-    const dr = r1 - r0;
-    const dc = c1 - c0;
-    const [vr, vc] = snapDir(dr, dc);
-
-    let steps: number;
-    if (vr === 0) steps = Math.abs(dc);
-    else if (vc === 0) steps = Math.abs(dr);
-    else steps = Math.min(Math.abs(dr), Math.abs(dc));
-
-    const line: [number, number][] = [];
-    for (let i = 0; i <= steps; i++) {
-      const r = r0 + vr * i;
-      const c = c0 + vc * i;
-      if (r < 0 || r >= rows || c < 0 || c >= cols) break;
-      line.push([r, c]);
-    }
-    return line;
-  }
-
-  function start(clientX: number, clientY: number) {
-    const cell = pointToCell(clientX, clientY);
-    if (!cell) return;
-    anchor = cell;
-    preview = [cell];
-    onPreviewPath(preview);
-  }
-
-  function move(clientX: number, clientY: number) {
-    if (!anchor) return;
-    const cell = pointToCell(clientX, clientY);
-    if (!cell) return;
-    preview = buildLine(anchor, cell);
-    onPreviewPath(preview);
-  }
-
-  function end() {
-    const result = preview;
-    anchor = null;
-    preview = [];
-    onFinishPath(result);
-  }
+  const pathSet = new Set(path.map(([r,c]) => k(r,c)));
 
   return (
-    <div
-      ref={containerRef}
-      style={{ display: 'inline-block', userSelect: 'none', border: '1px solid #e5e7eb', touchAction: 'none' }}
-      onMouseDown={(e) => start(e.clientX, e.clientY)}
-      onMouseMove={(e) => e.buttons === 1 && move(e.clientX, e.clientY)}
-      onMouseUp={() => end()}
-      onMouseLeave={() => end()}
-      onTouchStart={(e) => { const t = e.touches[0]; start(t.clientX, t.clientY); }}
-      onTouchMove={(e) => { const t = e.touches[0]; move(t.clientX, t.clientY); }}
-      onTouchEnd={() => end()}
-    >
+    <div style={{ display:'inline-block', border:'1px solid #e5e7eb' }}>
       {grid.map((row, r) => (
-        <div key={r} style={{ display: 'flex' }}>
+        <div key={r} style={{ display:'flex' }}>
           {row.map((ch, c) => {
-            const inDrag = dragPath.some(([rr, cc]) => rr === r && cc === c);
-            const isFound = foundCoords.has(k(r,c));
+            const id = k(r,c);
+            const isSelected = pathSet.has(id);
+            const isFound = foundCoords.has(id);
             return (
-              <div
+              <button
                 key={c}
+                onClick={() => onTapCell(r,c)}
                 style={{
                   width: cellPx,
                   height: cellPx,
-                  display: 'grid',
-                  placeItems: 'center',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                  fontWeight: 700,
-                  fontSize: 14,
-                  borderRight: '1px solid #e5e7eb',
-                  borderBottom: '1px solid #e5e7eb',
-                  background: isFound ? '#dcfce7' : inDrag ? '#e0e7ff' : '#fff',
+                  display:'grid',
+                  placeItems:'center',
+                  fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontWeight:700,
+                  fontSize:14,
+                  borderRight:'1px solid #e5e7eb',
+                  borderBottom:'1px solid #e5e7eb',
+                  background: isFound ? '#dcfce7' : isSelected ? '#e0e7ff' : '#fff',
                 }}
               >
                 {ch}
-              </div>
+              </button>
             );
           })}
         </div>

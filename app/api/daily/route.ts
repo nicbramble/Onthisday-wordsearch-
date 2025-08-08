@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { generateWordSearch } from '../../lib/wordsearch';
+import { generateWordSearch } from '../../../lib/wordsearch';
 
 export async function GET() {
   const words = ['HISTORY', 'PUZZLE', 'WORD', 'SEARCH', 'DAILY', 'TRIVIA', 'CLUES', 'GAME'];

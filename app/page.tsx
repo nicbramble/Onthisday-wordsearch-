@@ -18,16 +18,15 @@ type DailyRes = {
   clues?: Clue[];
 };
 
-function cellKey(r:number,c:number){ return `${r},${c}`; }
+function k(r:number,c:number){ return `${r},${c}`; }
 function norm(s:string){ return (s||'').toUpperCase().replace(/[^A-Z]/g,''); }
 
 export default function Home() {
   const [data, setData] = useState<DailyRes | null>(null);
   const [foundCoords, setFoundCoords] = useState<Set<string>>(new Set());
   const [foundWords, setFoundWords] = useState<Set<string>>(new Set());
-  const [guesses, setGuesses] = useState<Record<number, string>>({});
   const [dragPath, setDragPath] = useState<[number, number][]>([]);
-  const cellRefs = useRef<HTMLDivElement[][]>([]);
+  const [guesses, setGuesses] = useState<Record<number, string>>({});
 
   useEffect(() => {
     (async () => {
@@ -37,37 +36,34 @@ export default function Home() {
     })();
   }, []);
 
-  // Safe words list (belt & suspenders)
+  // always have words
   const words: string[] = Array.isArray(data?.words) && data!.words!.length
     ? data!.words!
     : Array.from(new Set((data?.placed ?? []).map(p => p.word)));
 
-  // ---- Drag logic ----
-  function startAt(r:number,c:number){ setDragPath([[r,c]]); }
-  function extendTo(r:number,c:number){
-    if (!dragPath.length) return;
-    const [lr,lc] = dragPath[dragPath.length-1];
-    if (lr===r && lc===c) return;
-    setDragPath(p => [...p,[r,c]]);
+  function handlePreviewPath(cells: [number, number][]) {
+    setDragPath(cells);
   }
-  function finishPath(){
-    if (!data || dragPath.length < 2){ setDragPath([]); return; }
-    const pathStr = dragPath.map(([r,c])=>cellKey(r,c)).join('|');
+
+  function handleFinishPath(cells: [number, number][]) {
+    setDragPath([]);
+    if (!data || cells.length < 2) return;
+
+    const pathStr = cells.map(([r, c]) => k(r, c)).join('|');
     const hit = data.placed.find(p => {
-      const fwd = p.coords.map(([r,c])=>cellKey(r,c)).join('|');
-      const rev = [...p.coords].reverse().map(([r,c])=>cellKey(r,c)).join('|');
-      return fwd===pathStr || rev===pathStr;
+      const fwd = p.coords.map(([r,c])=>k(r,c)).join('|');
+      const rev = [...p.coords].reverse().map(([r,c])=>k(r,c)).join('|');
+      return fwd === pathStr || rev === pathStr;
     });
+
     if (hit && !foundWords.has(hit.word)) {
       const nw = new Set(foundWords); nw.add(hit.word); setFoundWords(nw);
       const nc = new Set(foundCoords);
-      hit.coords.forEach(([r,c]) => nc.add(cellKey(r,c)));
+      hit.coords.forEach(([r,c]) => nc.add(k(r,c)));
       setFoundCoords(nc);
     }
-    setDragPath([]);
   }
 
-  // ---- Guess logic ----
   function submitGuess(n:number){
     if (!data?.clues) return;
     const clue = data.clues.find(c => c.number===n)!;
@@ -82,14 +78,13 @@ export default function Home() {
 
   if (!data) return <div style={{ padding: 20 }}>Loading…</div>;
 
-  // Completion check: guessed right AND found in grid
   const solvedByClue = new Set<number>();
   (data.clues ?? []).forEach(c => {
     const guessed = norm(guesses[c.number]||'') === c.answerNormalized;
     const found = foundWords.has(c.answerNormalized);
     if (guessed && found) solvedByClue.add(c.number);
   });
-  const allSolved = data.clues && solvedByClue.size === data.clues.length;
+  const allSolved = (data.clues?.length ?? 0) > 0 && solvedByClue.size === data.clues!.length;
 
   return (
     <main style={{ maxWidth: 1100, margin: '24px auto', padding: '0 16px' }}>
@@ -102,20 +97,16 @@ export default function Home() {
       </header>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 360px', gap: 24 }}>
-        {/* Grid */}
         <div>
           <Grid
             grid={data.grid}
             foundCoords={foundCoords}
             dragPath={dragPath}
-            onStart={startAt}
-            onExtend={extendTo}
-            onFinish={finishPath}
-            cellRefs={cellRefs}
+            onPreviewPath={handlePreviewPath}
+            onFinishPath={handleFinishPath}
           />
         </div>
 
-        {/* Riddle / Clues */}
         <aside>
           <h3 style={{ margin: 0, fontSize:16 }}>Clues</h3>
           <div style={{ fontSize:12, opacity:.65, marginBottom:8 }}>
@@ -168,58 +159,130 @@ export default function Home() {
 }
 
 function Grid({
-  grid, foundCoords, dragPath, onStart, onExtend, onFinish, cellRefs
-}:{
+  grid,
+  foundCoords,
+  dragPath,
+  onPreviewPath,
+  onFinishPath,
+}: {
   grid: string[][];
   foundCoords: Set<string>;
   dragPath: [number, number][];
-  onStart: (r:number,c:number)=>void;
-  onExtend: (r:number,c:number)=>void;
-  onFinish: ()=>void;
-  cellRefs: React.MutableRefObject<HTMLDivElement[][]>;
-}){
-  const size = grid[0]?.length ?? 12;
-  const cellPx = Math.max(28, Math.min(40, Math.floor(360 / size)));
+  onPreviewPath: (cells: [number, number][]) => void;
+  onFinishPath: (cells: [number, number][]) => void;
+}) {
+  const rows = grid.length;
+  const cols = grid[0]?.length ?? 0;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cellPx = Math.max(28, Math.min(40, Math.floor(360 / Math.max(cols, 12))));
+
+  const DIRS: [number, number][] = [
+    [-1, 0], [-1, 1], [0, 1], [1, 1],
+    [1, 0], [1, -1], [0, -1], [-1, -1],
+  ];
+
+  let anchor: [number, number] | null = null;
+  let preview: [number, number][] = [];
+
+  function pointToCell(clientX: number, clientY: number): [number, number] | null {
+    const el = containerRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const c = Math.floor(x / cellPx);
+    const r = Math.floor(y / cellPx);
+    if (r < 0 || r >= rows || c < 0 || c >= cols) return null;
+    return [r, c];
+  }
+
+  function snapDir(dr: number, dc: number): [number, number] {
+    const len = Math.hypot(dr, dc) || 1;
+    const ur = dr / len, uc = dc / len;
+    let best: [number, number] = [0, 1], bestDot = -2;
+    for (const [vr, vc] of DIRS) {
+      const dot = ur * vr + uc * vc;
+      if (dot > bestDot) { bestDot = dot; best = [vr, vc]; }
+    }
+    return best;
+  }
+
+  function buildLine(a: [number, number], b: [number, number]): [number, number][] {
+    const [r0, c0] = a;
+    const [r1, c1] = b;
+    const dr = r1 - r0;
+    const dc = c1 - c0;
+    const [vr, vc] = snapDir(dr, dc);
+
+    let steps: number;
+    if (vr === 0) steps = Math.abs(dc);
+    else if (vc === 0) steps = Math.abs(dr);
+    else steps = Math.min(Math.abs(dr), Math.abs(dc));
+
+    const line: [number, number][] = [];
+    for (let i = 0; i <= steps; i++) {
+      const r = r0 + vr * i;
+      const c = c0 + vc * i;
+      if (r < 0 || r >= rows || c < 0 || c >= cols) break;
+      line.push([r, c]);
+    }
+    return line;
+  }
+
+  function start(clientX: number, clientY: number) {
+    const cell = pointToCell(clientX, clientY);
+    if (!cell) return;
+    anchor = cell;
+    preview = [cell];
+    onPreviewPath(preview);
+  }
+
+  function move(clientX: number, clientY: number) {
+    if (!anchor) return;
+    const cell = pointToCell(clientX, clientY);
+    if (!cell) return;
+    preview = buildLine(anchor, cell);
+    onPreviewPath(preview);
+  }
+
+  function end() {
+    const result = preview;
+    anchor = null;
+    preview = [];
+    onFinishPath(result);
+  }
 
   return (
     <div
-      onMouseLeave={onFinish}
-      onTouchStart={(e) => {
-        const t = e.touches[0];
-        const el = document.elementFromPoint(t.clientX, t.clientY) as HTMLElement | null;
-        if (el?.dataset?.r && el?.dataset?.c) onStart(parseInt(el.dataset.r), parseInt(el.dataset.c));
-      }}
-      onTouchMove={(e) => {
-        const t = e.touches[0];
-        const el = document.elementFromPoint(t.clientX, t.clientY) as HTMLElement | null;
-        if (el?.dataset?.r && el?.dataset?.c) onExtend(parseInt(el.dataset.r), parseInt(el.dataset.c));
-      }}
-      onTouchEnd={onFinish}
-      style={{ display:'inline-block', userSelect:'none', border:'1px solid #e5e7eb', touchAction:'none' }}
+      ref={containerRef}
+      style={{ display: 'inline-block', userSelect: 'none', border: '1px solid #e5e7eb', touchAction: 'none' }}
+      onMouseDown={(e) => start(e.clientX, e.clientY)}
+      onMouseMove={(e) => e.buttons === 1 && move(e.clientX, e.clientY)}
+      onMouseUp={() => end()}
+      onMouseLeave={() => end()}
+      onTouchStart={(e) => { const t = e.touches[0]; start(t.clientX, t.clientY); }}
+      onTouchMove={(e) => { const t = e.touches[0]; move(t.clientX, t.clientY); }}
+      onTouchEnd={() => end()}
     >
       {grid.map((row, r) => (
         <div key={r} style={{ display: 'flex' }}>
           {row.map((ch, c) => {
-            const k = cellKey(r, c);
             const inDrag = dragPath.some(([rr, cc]) => rr === r && cc === c);
-            const isFound = foundCoords.has(k);
+            const isFound = foundCoords.has(k(r,c));
             return (
               <div
                 key={c}
-                data-r={r}
-                data-c={c}
-                ref={el => {
-                  if (!cellRefs.current[r]) cellRefs.current[r] = [];
-                  cellRefs.current[r][c] = el!;
-                }}
-                onMouseDown={()=>onStart(r,c)}
-                onMouseEnter={(e)=> e.buttons===1 && onExtend(r,c)}
-                onMouseUp={onFinish}
                 style={{
-                  width: cellPx, height: cellPx, display:'grid', placeItems:'center',
-                  fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace', fontWeight:700, fontSize:14,
-                  borderRight:'1px solid #e5e7eb', borderBottom:'1px solid #e5e7eb',
-                  background: isFound ? '#dcfce7' : inDrag ? '#e0e7ff' : '#fff'
+                  width: cellPx,
+                  height: cellPx,
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontWeight: 700,
+                  fontSize: 14,
+                  borderRight: '1px solid #e5e7eb',
+                  borderBottom: '1px solid #e5e7eb',
+                  background: isFound ? '#dcfce7' : inDrag ? '#e0e7ff' : '#fff',
                 }}
               >
                 {ch}

@@ -10,15 +10,13 @@ const MAX_ANSWER_LEN = 18;
 
 function todayNY(): string {
   const d = new Date();
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit'
-  });
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
   return fmt.format(d); // YYYY-MM-DD
 }
 
-// CSV parser: handles quotes, commas, \r\n, and BOM
+// CSV parser (BOM/quotes/commas/newlines)
 function parseCSV(csvRaw: string): string[][] {
-  const csv = csvRaw.replace(/^\uFEFF/, ''); // strip BOM
+  const csv = csvRaw.replace(/^\uFEFF/, '');
   const rows: string[][] = [];
   let i = 0, field = '', row: string[] = [], inQuotes = false;
   while (i < csv.length) {
@@ -27,15 +25,14 @@ function parseCSV(csvRaw: string): string[][] {
       if (ch === '"') {
         if (csv[i + 1] === '"') { field += '"'; i += 2; continue; }
         inQuotes = false; i++; continue;
-      }
-      field += ch; i++; continue;
+      } else { field += ch; i++; continue; }
     } else {
       if (ch === '"') { inQuotes = true; i++; continue; }
       if (ch === ',') { row.push(field); field = ''; i++; continue; }
       if (ch === '\n' || ch === '\r') {
         if (field.length || row.length) { row.push(field); rows.push(row); }
         field = ''; row = [];
-        if (ch === '\r' && csv[i + 1] === '\n') i++; // swallow \n after \r
+        if (ch === '\r' && csv[i + 1] === '\n') i++;
         i++; continue;
       }
       field += ch; i++; continue;
@@ -53,7 +50,6 @@ function tableToRows(table: string[][]): Row[] {
   const pi = headers.indexOf('prompt');
   const ai = headers.indexOf('answer');
   if (di < 0 || ai < 0) return [];
-
   const out: Row[] = [];
   for (let r = 1; r < table.length; r++) {
     const row = table[r]; if (!row) continue;
@@ -78,6 +74,7 @@ export async function GET(req: Request) {
     const csvUrl = process.env.CLUES_CSV_URL;
     let words: string[] = [];
     let source: 'sheet' | 'fallback' = 'fallback';
+    let clues: { number: number; type?: string; prompt: string; answerNormalized: string; answerDisplay: string }[] = [];
 
     if (csvUrl) {
       const res = await fetch(csvUrl, { next: { revalidate: 0 } });
@@ -85,22 +82,47 @@ export async function GET(req: Request) {
         const csvText = await res.text();
         const rows = tableToRows(parseCSV(csvText)).filter(r => r.date === dateKey);
 
-        const normalized = rows
-          .map(r => normalize(r.answer))
-          .filter(w => w.length >= 3 && w.length <= MAX_ANSWER_LEN);
+        // Build clues from rows
+        const normRows = rows
+          .map(r => ({
+            type: r.type,
+            prompt: r.prompt || '', // can be blank if you just want a word bank day
+            answerNormalized: normalize(r.answer),
+            answerDisplay: r.answer
+          }))
+          .filter(r => r.answerNormalized.length >= 3 && r.answerNormalized.length <= MAX_ANSWER_LEN);
 
-        const unique = Array.from(new Set(normalized));
-        if (unique.length) {
-          // clamp to 8–12 words
-          const count = Math.max(MIN_WORDS, Math.min(MAX_WORDS, unique.length));
-          words = unique.slice(0, count);
+        const uniqueAnswers = Array.from(new Set(normRows.map(r => r.answerNormalized)));
+        const count = Math.max(MIN_WORDS, Math.min(MAX_WORDS, uniqueAnswers.length));
+
+        if (uniqueAnswers.length) {
+          words = uniqueAnswers.slice(0, count);
+          clues = normRows
+            .filter(r => words.includes(r.answerNormalized))
+            .slice(0, count)
+            .map((r, i) => ({
+              number: i + 1,
+              type: r.type,
+              prompt: r.prompt,
+              answerNormalized: r.answerNormalized,
+              answerDisplay: r.answerDisplay
+            }));
           source = 'sheet';
         }
       }
     }
 
     if (!words.length) {
-      words = ['HISTORY','PUZZLE','WORD','SEARCH','DAILY','TRIVIA','CLUES','GAME','TIMELINE','EVENT'];
+      // Fallback day (no prompt clues)
+      const fallback = ['HISTORY','PUZZLE','WORD','SEARCH','DAILY','TRIVIA','CLUES','GAME','TIMELINE','EVENT'];
+      words = fallback;
+      clues = fallback.map((w, i) => ({
+        number: i + 1,
+        type: 'TRIVIA',
+        prompt: `Find the word: ${w}`,
+        answerNormalized: w,
+        answerDisplay: w
+      }));
       source = 'fallback';
     }
 
@@ -111,10 +133,11 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       dateKey,
-      source,           // <-- 'sheet' when your rows matched today
+      source,
       grid: puzzle.grid,
       placed: puzzle.placed,
-      words: outWords
+      words: outWords,
+      clues
     }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Unknown error' }, { status: 500 });

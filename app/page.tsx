@@ -3,14 +3,65 @@ import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import tz from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
-import { extractKeywords } from '@/lib/keywords';
 import { makePuzzle, Puzzle } from '@/lib/wordsearch';
 
 dayjs.extend(utc);
 dayjs.extend(tz);
 
-type Otd = any;
+type OtdItem = { year?: number; text?: string; pages?: { normalizedtitle?: string }[] };
+type Otd = { events?: OtdItem[]; births?: OtdItem[]; deaths?: OtdItem[]; holidays?: OtdItem[] };
+
 const TZ = 'America/New_York';
+
+// Local STOP list to keep noise out
+const STOP = new Set([
+  'THE','OF','AND','IN','ON','AT','TO','A','AN','FOR','WITH','BY','FROM','OR','AS','IS',
+  'UNITED','STATES','KINGDOM','REPUBLIC','STATE','CITY','COUNTY','RIVER','SEA','LAKE'
+]);
+
+function tokenizeTitle(t: string) {
+  return t.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+}
+function tokenizeText(s: string) {
+  // Grab capitalized-ish words and proper nouns from body text
+  return (s || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function extractKeywordsRobust(otd: Otd | null, max = 16) {
+  if (!otd) return [];
+  const pools: OtdItem[] = [
+    ...(otd.events ?? []),
+    ...(otd.births ?? []),
+    ...(otd.deaths ?? []),
+    ...(otd.holidays ?? [])
+  ];
+
+  const bag: string[] = [];
+
+  for (const item of pools) {
+    const titles = (item.pages ?? []).map(p => p.normalizedtitle ?? '').filter(Boolean);
+    for (const t of titles) bag.push(...tokenizeTitle(t));
+
+    // backfill from text
+    if (item.text) bag.push(...tokenizeText(item.text));
+  }
+
+  // Clean:
+  // - A–Z only
+  // - length 3..12 so they fit 12x12 by default
+  // - drop common junk
+  const cleaned = bag
+    .map(w => w.replace(/[^A-Z]/g, ''))
+    .filter(w => w.length >= 3 && w.length <= 12 && !STOP.has(w));
+
+  // unique, bias toward longer words first
+  const uniq = Array.from(new Set(cleaned)).sort((a, b) => b.length - a.length);
+  return uniq.slice(0, max);
+}
 
 export default function Home() {
   const today = dayjs().tz(TZ);
@@ -23,6 +74,7 @@ export default function Home() {
   const [found, setFound] = useState<Set<string>>(new Set());
   const [blurbs, setBlurbs] = useState<{ word: string; year?: number; text: string }[]>([]);
   const [streak, setStreak] = useState<number>(0);
+  const [debugInfo, setDebugInfo] = useState<{ words: string[]; size: number }>({ words: [], size: 12 });
 
   const lastSolvedKey = 'lastSolvedDate';
 
@@ -30,20 +82,25 @@ export default function Home() {
   useEffect(() => {
     (async () => {
       const res = await fetch(`/api/onthisday/${mm}/${dd}`);
-      const json = await res.json();
+      const json: Otd = await res.json();
       setOtd(json);
 
-      // Extract words from API
-      let words = extractKeywords(json, 14);
-      console.log('Extracted words for today:', words);
+      // Extract robust keywords
+      let words = extractKeywordsRobust(json, 16);
 
-      // Fallback test words if API returns nothing
+      // Fallback if needed
       if (!words.length) {
-        words = ['TEST', 'WORD', 'SEARCH', 'PUZZLE', 'HISTORY', 'EVENT', 'TODAY', 'FUN'];
+        words = ['TEST','WORD','SEARCH','PUZZLE','HISTORY','EVENT','TODAY','FUN','TIMELINE','PAST'];
       }
 
-      const p = makePuzzle(words, dateKey, 12);
+      // Pick grid size that can fit the longest word (min 12)
+      const longest = words.reduce((m, w) => Math.max(m, w.length), 0);
+      const gridSize = Math.max(12, longest);
+
+      const p = makePuzzle(words, dateKey, gridSize);
       setPuzzle(p);
+      setDebugInfo({ words, size: gridSize });
+      // console.log('Extracted words for today:', words);
     })();
   }, [mm, dd, dateKey]);
 
@@ -64,7 +121,12 @@ export default function Home() {
   }
 
   function onEnter(r: number, c: number) {
-    if (dragPath.length) setDragPath((p) => [...p, [r, c]]);
+    if (dragPath.length) setDragPath((p) => {
+      const last = p[p.length - 1];
+      // avoid duplicates when finger lingers on same cell
+      if (last && last[0] === r && last[1] === c) return p;
+      return [...p, [r, c]];
+    });
   }
 
   function onUp() {
@@ -113,6 +175,11 @@ export default function Home() {
         <div style={{ display: 'flex', gap: 24 }}>
           {/* Left: Puzzle + blurbs */}
           <div style={{ flex: '2 1 auto' }}>
+            <div style={{ marginBottom: 8, fontSize: 12, color: '#6b7280' }}>
+              {/* Tiny debug helper you can remove later */}
+              Extracted {debugInfo.words.length} words • Grid {debugInfo.size}×{debugInfo.size}
+            </div>
+
             <Grid
               grid={puzzle.grid}
               onDown={onDown}
@@ -143,14 +210,14 @@ export default function Home() {
           </div>
 
           {/* Right: Word Key box */}
-          <div style={{ flex: '1 1 200px' }}>
+          <div style={{ flex: '1 1 220px' }}>
             <h3>Word Key</h3>
             <div
               style={{
                 border: '1px solid #ddd',
                 borderRadius: 6,
                 padding: '8px',
-                maxHeight: '400px',
+                maxHeight: '420px',
                 overflowY: 'auto',
                 background: '#fafafa'
               }}
@@ -178,10 +245,10 @@ export default function Home() {
   );
 }
 
-function pickBlurbFor(word: string, otd: any) {
+function pickBlurbFor(word: string, otd: Otd | null) {
   if (!otd) return null;
   const pools = ['events', 'births', 'deaths', 'holidays'].flatMap((k) =>
-    (otd?.[k] ?? []).map((x: any) => ({ year: x.year, text: x.text ?? '' }))
+    (otd?.[k as keyof Otd] as OtdItem[] | undefined ?? []).map((x: any) => ({ year: x.year, text: x.text ?? '' }))
   );
   const hit = pools.find((x: any) => x.text?.toUpperCase().includes(word));
   return hit ?? pools[0] ?? null;

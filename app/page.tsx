@@ -1,33 +1,58 @@
 'use client';
+import { useEffect, useRef, useState } from 'react';
 
-import { useEffect, useState } from 'react';
+type PlacedWord = { word: string; coords: [number, number][] };
+type DailyRes = { dateKey: string; grid: string[][]; placed: PlacedWord[]; words: string[] };
 
-export default function HomePage() {
-  const [data, setData] = useState<any>(null);
+function cellKey(r: number, c: number) {
+  return `${r},${c}`;
+}
+
+export default function Home() {
+  const [data, setData] = useState<DailyRes | null>(null);
+  const [foundWords, setFoundWords] = useState<Set<string>>(new Set());
+  const [foundCoords, setFoundCoords] = useState<Set<string>>(new Set());
+  const [dragPath, setDragPath] = useState<[number, number][]>([]);
+  const cellRefs = useRef<HTMLDivElement[][]>([]);
 
   useEffect(() => {
-    fetch('/api/daily')
-      .then(res => res.json())
-      .then(setData)
-      .catch(err => console.error(err));
+    (async () => {
+      const res = await fetch('/api/daily', { cache: 'no-store' });
+      const json = await res.json();
+      setData(json);
+    })();
   }, []);
 
-  if (!data) return <div>Loading...</div>;
+  function startAt(r: number, c: number) {
+    setDragPath([[r, c]]);
+  }
+  function extendTo(r: number, c: number) {
+    if (!dragPath.length) return;
+    const [lr, lc] = dragPath[dragPath.length - 1];
+    if (lr === r && lc === c) return;
+    setDragPath((p) => [...p, [r, c]]);
+  }
+  function finishPath() {
+    if (!data || dragPath.length < 2) {
+      setDragPath([]);
+      return;
+    }
+    const pathStr = dragPath.map(([r, c]) => cellKey(r, c)).join('|');
 
-  return (
-    <div style={{ padding: 20 }}>
-      <h1>Daily Clues Word Search</h1>
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${data.grid[0].length}, 30px)`, gap: '2px' }}>
-        {data.grid.map((row: string[], r: number) =>
-          row.map((cell: string, c: number) => (
-            <div key={r + '-' + c} style={{ border: '1px solid #ccc', textAlign: 'center' }}>{cell}</div>
-          ))
-        )}
-      </div>
-      <h2>Clues</h2>
-      <ul>
-        {data.words.map((w: string) => <li key={w}>{w}</li>)}
-      </ul>
-    </div>
-  );
-}
+    const hit = data.placed.find((p) => {
+      const fwd = p.coords.map(([r, c]) => cellKey(r, c)).join('|');
+      const rev = [...p.coords].reverse().map(([r, c]) => cellKey(r, c)).join('|');
+      return fwd === pathStr || rev === pathStr;
+    });
+
+    if (hit && !foundWords.has(hit.word)) {
+      const nextWords = new Set(foundWords);
+      nextWords.add(hit.word);
+      setFoundWords(nextWords);
+
+      const nextCoords = new Set(foundCoords);
+      hit.coords.forEach(([r, c]) => nextCoords.add(cellKey(r, c)));
+      setFoundCoords(nextCoords);
+    }
+
+    set

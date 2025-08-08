@@ -32,7 +32,7 @@ export function generateWordSearch(wordsIn: string[], seed: string, size?: numbe
   const n = size ?? Math.max(12, longest);
 
   const rng = seededRng(seed);
-  const sorted = [...new Set(words)].sort((a, b) => b.length - a.length);
+const sorted = Array.from(new Set(words)).sort((a, b) => b.length - a.length);
 
   const grid = Array.from({ length: n }, () => Array(n).fill('_'));
   const placed: PlacedWord[] = [];

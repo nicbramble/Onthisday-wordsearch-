@@ -10,11 +10,13 @@ const MAX_ANSWER_LEN = 18;
 
 function todayNY(): string {
   const d = new Date();
-  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit'
+  });
   return fmt.format(d); // YYYY-MM-DD
 }
 
-// CSV parser (BOM/quotes/commas/newlines)
+// CSV parser (handles BOM/quotes/commas/\r\n)
 function parseCSV(csvRaw: string): string[][] {
   const csv = csvRaw.replace(/^\uFEFF/, '');
   const rows: string[][] = [];
@@ -82,20 +84,18 @@ export async function GET(req: Request) {
         const csvText = await res.text();
         const rows = tableToRows(parseCSV(csvText)).filter(r => r.date === dateKey);
 
-        // Build clues from rows
         const normRows = rows
           .map(r => ({
             type: r.type,
-            prompt: r.prompt || '', // can be blank if you just want a word bank day
+            prompt: r.prompt || '',
             answerNormalized: normalize(r.answer),
             answerDisplay: r.answer
           }))
           .filter(r => r.answerNormalized.length >= 3 && r.answerNormalized.length <= MAX_ANSWER_LEN);
 
         const uniqueAnswers = Array.from(new Set(normRows.map(r => r.answerNormalized)));
-        const count = Math.max(MIN_WORDS, Math.min(MAX_WORDS, uniqueAnswers.length));
-
         if (uniqueAnswers.length) {
+          const count = Math.max(MIN_WORDS, Math.min(MAX_WORDS, uniqueAnswers.length));
           words = uniqueAnswers.slice(0, count);
           clues = normRows
             .filter(r => words.includes(r.answerNormalized))
@@ -113,7 +113,6 @@ export async function GET(req: Request) {
     }
 
     if (!words.length) {
-      // Fallback day (no prompt clues)
       const fallback = ['HISTORY','PUZZLE','WORD','SEARCH','DAILY','TRIVIA','CLUES','GAME','TIMELINE','EVENT'];
       words = fallback;
       clues = fallback.map((w, i) => ({

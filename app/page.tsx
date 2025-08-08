@@ -33,7 +33,8 @@ export default function Home() {
       const json = await res.json();
       setOtd(json);
       const words = extractKeywords(json, 14);
-      setPuzzle(makePuzzle(words, dateKey, 12));
+      const p = makePuzzle(words, dateKey, 12);
+      setPuzzle(p);
     })();
   }, [mm, dd, dateKey]);
 
@@ -91,7 +92,7 @@ export default function Home() {
   }
 
   return (
-    <main style={{ maxWidth: 920, margin: '40px auto', padding: '0 16px', fontFamily: 'system-ui, -apple-system, Segoe UI' }}>
+    <main style={{ maxWidth: 1100, margin: '40px auto', padding: '0 16px', fontFamily: 'system-ui, -apple-system, Segoe UI' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
         <h1 style={{ margin: 0 }}>On-This-Day Word Search</h1>
         <div>
@@ -100,42 +101,66 @@ export default function Home() {
       </header>
 
       {puzzle ? (
-        <>
-          <Grid
-            grid={puzzle.grid}
-            onDown={onDown}
-            onEnter={onEnter}
-            onUp={onUp}
-            cellRefs={cellRefs}
-            foundCoords={new Set(
-              puzzle.placed
-                .filter((p) => found.has(p.word))
-                .flatMap((p) => p.coords.map(([r, c]) => `${r},${c}`))
-            )}
-            dragPath={dragPath}
-          />
+        <div style={{ display: 'flex', gap: 24 }}>
+          {/* Left: Puzzle + blurbs */}
+          <div style={{ flex: '2 1 auto' }}>
+            <Grid
+              grid={puzzle.grid}
+              onDown={onDown}
+              onEnter={onEnter}
+              onUp={onUp}
+              cellRefs={cellRefs}
+              foundCoords={new Set(
+                puzzle.placed
+                  .filter((p) => found.has(p.word))
+                  .flatMap((p) => p.coords.map(([r, c]) => `${r},${c}`))
+              )}
+              dragPath={dragPath}
+            />
 
-          <WordBank words={puzzle.allWords} found={found} />
+            <WordBank words={puzzle.allWords} found={found} />
 
-          <section style={{ marginTop: 24 }}>
-            <h3>Unlocked today</h3>
-            <div style={{ display: 'grid', gap: 12 }}>
-              {blurbs.map((b, i) => (
-                <div key={i} style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafafa' }}>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>{b.year ?? '—'}</div>
-                  <div>{b.text}</div>
+            <section style={{ marginTop: 24 }}>
+              <h3>Unlocked today</h3>
+              <div style={{ display: 'grid', gap: 12 }}>
+                {blurbs.map((b, i) => (
+                  <div key={i} style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafafa' }}>
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>{b.year ?? '—'}</div>
+                    <div>{b.text}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          {/* Right: Word Key box */}
+          <div style={{ flex: '1 1 200px' }}>
+            <h3>Word Key</h3>
+            <div
+              style={{
+                border: '1px solid #ddd',
+                borderRadius: 6,
+                padding: '8px',
+                maxHeight: '400px',
+                overflowY: 'auto',
+                background: '#fafafa'
+              }}
+            >
+              {puzzle.allWords.map((w) => (
+                <div key={w} style={{ padding: '4px 0', fontSize: 14 }}>
+                  {w}
                 </div>
               ))}
             </div>
-          </section>
-
-          <footer style={{ marginTop: 32, fontSize: 12, opacity: 0.7 }}>
-            Data from Wikipedia (Wikimedia Feed API). Content licensed under CC-BY-SA.
-          </footer>
-        </>
+          </div>
+        </div>
       ) : (
         <p>Loading…</p>
       )}
+
+      <footer style={{ marginTop: 32, fontSize: 12, opacity: 0.7 }}>
+        Data from Wikipedia (Wikimedia Feed API). Content licensed under CC-BY-SA.
+      </footer>
     </main>
   );
 }

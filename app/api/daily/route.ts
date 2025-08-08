@@ -1,64 +1,133 @@
 import { NextResponse } from 'next/server';
+import { generateWordSearch, normalize } from '../../../lib/wordsearch';
+
+type Row = { date: string; type?: string; prompt?: string; answer: string };
 
 const TZ = 'America/New_York';
+const MIN_WORDS = 8;
+const MAX_WORDS = 12;
+const MAX_ANSWER_LEN = 18; // generator auto-expands grid; cap silly-long inputs
+
 function todayNY(): string {
   const d = new Date();
-  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
-  return fmt.format(d);
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return fmt.format(d); // YYYY-MM-DD
 }
 
-function parseCSV(csv: string): string[][] {
+// CSV parser (handles quotes/commas/newlines + \r\n + BOM)
+function parseCSV(csvRaw: string): string[][] {
+  const csv = csvRaw.replace(/^\uFEFF/, ''); // strip BOM
   const rows: string[][] = [];
   let i = 0, field = '', row: string[] = [], inQuotes = false;
   while (i < csv.length) {
     const ch = csv[i];
     if (inQuotes) {
       if (ch === '"') {
-        if (csv[i + 1] === '"') { field += '"'; i += 2; continue; }
+        if (csv[i + 1] === '"') { field += '"'; i += 2; continue; } // escaped quote
         inQuotes = false; i++; continue;
       } else { field += ch; i++; continue; }
     } else {
       if (ch === '"') { inQuotes = true; i++; continue; }
       if (ch === ',') { row.push(field); field = ''; i++; continue; }
       if (ch === '\n' || ch === '\r') {
+        // finalize current row if we have any content
         if (field.length || row.length) { row.push(field); rows.push(row); }
         field = ''; row = [];
-        if (ch === '\r' && csv[i+1] === '\n') i++;
+        if (ch === '\r' && csv[i + 1] === '\n') i++; // swallow \n after \r
         i++; continue;
       }
       field += ch; i++; continue;
     }
   }
   if (field.length || row.length) { row.push(field); rows.push(row); }
-  return rows;
+  return rows.filter(r => r.some(cell => (cell ?? '').trim().length)); // drop empty lines
 }
 
-export async function GET() {
-  const dateKey = todayNY();
-  const url = process.env.CLUES_CSV_URL || null;
-  if (!url) return NextResponse.json({ ok: false, reason: 'CLUES_CSV_URL not set', dateKey });
-
-  const res = await fetch(url);
-  if (!res.ok) return NextResponse.json({ ok: false, reason: 'Fetch failed', status: res.status, dateKey });
-
-  const text = await res.text();
-  const table = parseCSV(text);
-  const headers = (table[0] || []).map(h => h.trim().toLowerCase());
+function tableToRows(table: string[][]): Row[] {
+  if (!table.length) return [];
+  const headers = table[0].map(h => (h ?? '').toString().trim().toLowerCase());
   const di = headers.indexOf('date');
+  const ti = headers.indexOf('type');
+  const pi = headers.indexOf('prompt');
   const ai = headers.indexOf('answer');
+  if (di < 0 || ai < 0) return []; // must have date + answer
 
-  const sample = table.slice(1, Math.min(table.length, 8)).map(r => ({
-    date: r[di], answer: r[ai]
-  }));
+  const out: Row[] = [];
+  for (let r = 1; r < table.length; r++) {
+    const row = table[r];
+    if (!row) continue;
+    const date = (row[di] ?? '').trim();
+    const answer = (row[ai] ?? '').trim();
+    if (!date || !answer) continue;
+    out.push({
+      date,
+      type: ti >= 0 ? (row[ti] ?? '').trim() : undefined,
+      prompt: pi >= 0 ? (row[pi] ?? '').trim() : undefined,
+      answer,
+    });
+  }
+  return out;
+}
 
-  const todays = table.slice(1).filter(r => (r[di]||'').trim() === dateKey);
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const dateKey = searchParams.get('date') || todayNY();
 
-  return NextResponse.json({
-    ok: true,
-    dateKey,
-    hasTodayRows: todays.length > 0,
-    sample,            // first few rows so you can verify headers/values
-    countTotal: table.length - 1,
-    headers
-  });
+    const csvUrl = process.env.CLUES_CSV_URL;
+    let words: string[] = [];
+    let source: 'sheet' | 'fallback' = 'fallback';
+
+    // Pull from Google Sheet (CSV)
+    if (csvUrl) {
+      const res = await fetch(csvUrl, { next: { revalidate: 60 } });
+      if (res.ok) {
+        const csvText = await res.text();
+        const rows = tableToRows(parseCSV(csvText))
+          .filter(r => r.date === dateKey);
+
+        // Take answers, normalize, filter
+        const normalized = rows
+          .map(r => normalize(r.answer))
+          .filter(w => w.length >= 3 && w.length <= MAX_ANSWER_LEN);
+
+        // Deduplicate and trim to 8–12
+        const unique = Array.from(new Set(normalized));
+        if (unique.length) {
+          words = unique.slice(0, Math.max(MIN_WORDS, Math.min(MAX_WORDS, unique.length)));
+          source = 'sheet';
+        }
+      }
+    }
+
+    // Fallback if sheet missing/empty for that date
+    if (!words.length) {
+      words = ['HISTORY','PUZZLE','WORD','SEARCH','DAILY','TRIVIA','CLUES','GAME','TIMELINE','EVENT'];
+      source = 'fallback';
+    }
+
+    // Build deterministic puzzle
+    const puzzle = generateWordSearch(words, dateKey);
+
+    // ALWAYS include words in response (even if we had to derive)
+    const outWords = (puzzle.allWords?.length ? puzzle.allWords : Array.from(new Set(puzzle.placed.map(p => p.word))));
+
+    return NextResponse.json({
+      dateKey,
+      source,
+      grid: puzzle.grid,
+      placed: puzzle.placed,  // [{word, coords:[[r,c],...]}]
+      words: outWords
+    }, {
+      // help debugging stale caches while you iterate
+      headers: { 'Cache-Control': 'no-store' }
+    });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || 'Unknown error' }, { status: 500 });
+  }
 }

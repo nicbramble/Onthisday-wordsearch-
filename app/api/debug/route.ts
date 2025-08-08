@@ -4,10 +4,9 @@ const TZ = 'America/New_York';
 function todayNY(): string {
   const d = new Date();
   const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
-  return fmt.format(d); // YYYY-MM-DD
+  return fmt.format(d);
 }
 
-// minimal CSV parser
 function parseCSV(csvRaw: string): string[][] {
   const csv = csvRaw.replace(/^\uFEFF/, '');
   const rows: string[][] = [];
@@ -41,22 +40,23 @@ export async function GET() {
   if (!url) return NextResponse.json({ ok:false, reason:'CLUES_CSV_URL not set', dateKey });
 
   const res = await fetch(url, { next: { revalidate: 0 } });
-  if (!res.ok) return NextResponse.json({ ok:false, reason:'Fetch failed', status:res.status, dateKey });
+  if (!res.ok) return NextResponse.json({ ok:false, reason:'Fetch failed', status: res.status, dateKey });
 
   const text = await res.text();
   const table = parseCSV(text);
   const headers = (table[0] || []).map(h => (h ?? '').toString().trim().toLowerCase());
   const di = headers.indexOf('date');
+  const ai = headers.indexOf('answer');
   const ti = headers.indexOf('type');
   const pi = headers.indexOf('prompt');
-  const ai = headers.indexOf('answer');
 
-  const firstRows = table.slice(1, 8).map(r => ({
+  const sample = table.slice(1, Math.min(10, table.length)).map(r => ({
     date: (r[di] ?? '').trim(),
     type: ti>=0 ? (r[ti] ?? '').trim() : '',
     prompt: pi>=0 ? (r[pi] ?? '').trim() : '',
     answer: ai>=0 ? (r[ai] ?? '').trim() : ''
   }));
+
   const todays = table.slice(1).filter(r => (r[di] ?? '').trim() === dateKey);
 
   return NextResponse.json({
@@ -65,6 +65,6 @@ export async function GET() {
     headers,
     countRows: Math.max(0, table.length - 1),
     hasTodayRows: todays.length > 0,
-    sample: firstRows
-  }, { headers: { 'Cache-Control':'no-store' } });
+    sample
+  }, { headers: { 'Cache-Control': 'no-store' } });
 }
